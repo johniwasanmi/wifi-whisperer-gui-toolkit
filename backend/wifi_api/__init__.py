@@ -1,0 +1,2 @@
+
+# WiFi API app initialization

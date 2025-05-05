@@ -7,8 +7,8 @@ This is the backend component for the WiFi Exploitation Framework. It provides a
 
 ### Prerequisites
 
-- Python 3.7 or higher
-- Flask and other dependencies
+- Python 3.8 or higher
+- Django and Django Channels for async support
 - Aircrack-ng suite (airmon-ng, airodump-ng, aireplay-ng)
 
 ### Installation
@@ -16,7 +16,7 @@ This is the backend component for the WiFi Exploitation Framework. It provides a
 1. Install Python dependencies:
 
 ```bash
-pip install flask flask-cors
+pip install django django-rest-framework django-cors-headers channels channels-redis
 ```
 
 2. Install the Aircrack-ng suite:
@@ -33,6 +33,19 @@ sudo dnf install aircrack-ng
 sudo pacman -S aircrack-ng
 ```
 
+3. Install Redis for asynchronous task handling:
+
+```bash
+# For Ubuntu/Debian
+sudo apt-get install redis-server
+
+# For Fedora
+sudo dnf install redis
+
+# For Arch Linux
+sudo pacman -S redis
+```
+
 ### Running the Backend
 
 1. Navigate to the backend directory:
@@ -41,10 +54,16 @@ sudo pacman -S aircrack-ng
 cd backend
 ```
 
-2. Start the Flask server:
+2. Run database migrations:
 
 ```bash
-sudo python app.py
+python manage.py migrate
+```
+
+3. Start the Django server:
+
+```bash
+sudo python manage.py runserver 0.0.0.0:5000
 ```
 
 > Note: `sudo` is required because the backend needs to access wireless interfaces.
@@ -53,12 +72,16 @@ The server will start on http://localhost:5000 by default.
 
 ## API Endpoints
 
-- `GET /api/interfaces` - Get available wireless interfaces
-- `POST /api/monitor/start` - Start monitor mode on an interface
-- `POST /api/monitor/stop` - Stop monitor mode on an interface
-- `POST /api/scan` - Scan for wireless networks
-- `POST /api/attack/deauth` - Perform a deauthentication attack
-- `GET /api/status` - Check backend server status
+- `GET /api/interfaces/` - Get available wireless interfaces
+- `POST /api/monitor/start/` - Start monitor mode on an interface
+- `POST /api/monitor/stop/` - Stop monitor mode on an interface
+- `POST /api/scan/` - Scan for wireless networks
+- `POST /api/attack/deauth/` - Perform a deauthentication attack
+- `GET /api/status/` - Check backend server status
+
+## WebSocket Endpoints
+
+- `/ws/scan/` - WebSocket connection for real-time scan updates
 
 ## Important Notes
 
