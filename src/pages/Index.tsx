@@ -11,70 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Search, RefreshCw } from "lucide-react";
-
-// Mock data for networks
-const mockNetworks: Network[] = [
-  {
-    id: "1",
-    ssid: "HomeWiFi",
-    bssid: "00:11:22:33:44:55",
-    channel: 6,
-    signal: 85,
-    encryption: "WPA2",
-    vendor: "Netgear",
-    clients: 3,
-    firstSeen: new Date(),
-    lastSeen: new Date(),
-  },
-  {
-    id: "2",
-    ssid: "Office Network",
-    bssid: "AA:BB:CC:DD:EE:FF",
-    channel: 11,
-    signal: 65,
-    encryption: "WPA3",
-    vendor: "Cisco",
-    clients: 12,
-    firstSeen: new Date(),
-    lastSeen: new Date(),
-  },
-  {
-    id: "3",
-    ssid: "Guest WiFi",
-    bssid: "11:22:33:44:55:66",
-    channel: 1,
-    signal: 35,
-    encryption: "OPEN",
-    vendor: "TP-Link",
-    clients: 5,
-    firstSeen: new Date(),
-    lastSeen: new Date(),
-  },
-  {
-    id: "4",
-    ssid: "",
-    bssid: "66:77:88:99:AA:BB",
-    channel: 3,
-    signal: 42,
-    encryption: "WPA2",
-    vendor: "Linksys",
-    clients: 1,
-    firstSeen: new Date(),
-    lastSeen: new Date(),
-  },
-  {
-    id: "5",
-    ssid: "Secure Network",
-    bssid: "CC:DD:EE:FF:00:11",
-    channel: 2,
-    signal: 78,
-    encryption: "WEP",
-    vendor: "D-Link",
-    clients: 2,
-    firstSeen: new Date(),
-    lastSeen: new Date(),
-  },
-];
+import { wifiService } from "@/services/wifiService";
 
 const Index = () => {
   const [networks, setNetworks] = useState<Network[]>([]);
@@ -84,6 +21,29 @@ const Index = () => {
   const [selectedNetwork, setSelectedNetwork] = useState<Network | undefined>(undefined);
   const [searchTerm, setSearchTerm] = useState("");
   const [showAttackModal, setShowAttackModal] = useState(false);
+  const [isBackendConnected, setIsBackendConnected] = useState(false);
+
+  useEffect(() => {
+    // Check if backend is accessible
+    const checkBackendStatus = async () => {
+      try {
+        const response = await fetch("http://localhost:5000/api/status");
+        if (response.ok) {
+          setIsBackendConnected(true);
+          addLog("Backend connection established");
+        } else {
+          setIsBackendConnected(false);
+          addLog("WARNING: Backend server not responding - using mock data");
+        }
+      } catch (error) {
+        setIsBackendConnected(false);
+        addLog("WARNING: Backend server not accessible - using mock data");
+        console.error("Backend connection error:", error);
+      }
+    };
+    
+    checkBackendStatus();
+  }, []);
 
   // Add log entry with timestamp
   const addLog = (message: string) => {
@@ -92,26 +52,28 @@ const Index = () => {
   };
 
   // Start network scan
-  const handleStartScan = (interfaceName: string) => {
+  const handleStartScan = async (interfaceName: string) => {
     setIsScanning(true);
-    setNetworks([]);
-    setFilteredNetworks([]);
     addLog(`Starting network scan on interface ${interfaceName}`);
     
-    // Simulate finding networks over time
-    let discoveredCount = 0;
-    const discoverInterval = setInterval(() => {
-      if (discoveredCount < mockNetworks.length) {
-        const newNetwork = mockNetworks[discoveredCount];
-        addLog(`Found network: ${newNetwork.ssid || 'Hidden Network'} (${newNetwork.bssid})`);
-        setNetworks(prev => [...prev, newNetwork]);
-        setFilteredNetworks(prev => [...prev, newNetwork]);
-        discoveredCount++;
-      } else {
-        clearInterval(discoverInterval);
-        addLog(`Scan complete. Found ${mockNetworks.length} networks.`);
-      }
-    }, 1500);
+    try {
+      const result = await wifiService.scanNetworks(interfaceName);
+      setNetworks(result.networks);
+      setFilteredNetworks(result.networks);
+      
+      addLog(`Scan complete. Found ${result.networks.length} networks.`);
+      toast.success(`Scan complete`, {
+        description: `Found ${result.networks.length} networks`,
+      });
+    } catch (error) {
+      console.error("Scan failed:", error);
+      addLog(`Error during scan: ${error}`);
+      toast.error("Network scan failed", {
+        description: "Check console for details",
+      });
+    } finally {
+      setIsScanning(false);
+    }
   };
 
   // Stop network scan
@@ -130,7 +92,7 @@ const Index = () => {
     } else {
       const filtered = networks.filter(
         network =>
-          network.ssid.toLowerCase().includes(searchTerm.toLowerCase()) ||
+          (network.ssid || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
           network.bssid.toLowerCase().includes(searchTerm.toLowerCase()) ||
           network.vendor.toLowerCase().includes(searchTerm.toLowerCase())
       );
@@ -170,6 +132,13 @@ const Index = () => {
             </Button>
           </div>
         </div>
+
+        {!isBackendConnected && (
+          <div className="p-4 border border-yellow-600 bg-yellow-950/20 rounded-md mb-4 text-sm text-yellow-200">
+            Backend connection not detected. Using mock data. 
+            To use real scanning and attacks, please follow the setup instructions in the backend/README.md file.
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           <div className="lg:col-span-1">

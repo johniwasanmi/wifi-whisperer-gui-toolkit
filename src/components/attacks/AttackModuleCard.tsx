@@ -2,12 +2,12 @@
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Icon } from "lucide-react";
+import { LucideIcon } from "lucide-react";
 
 interface AttackModuleCardProps {
   title: string;
   description: string;
-  icon: Icon;
+  icon: LucideIcon;
   difficulty: "easy" | "medium" | "hard";
   onClick: () => void;
   disabled?: boolean;

@@ -9,6 +9,8 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Progress } from "@/components/ui/progress";
 import { Network } from "@/types/network";
+import { toast } from "sonner";
+import { wifiService } from "@/services/wifiService";
 
 interface DeauthAttackProps {
   targetNetwork?: Network;
@@ -22,25 +24,51 @@ const DeauthAttack = ({ targetNetwork, onClose }: DeauthAttackProps) => {
   const [isAttacking, setIsAttacking] = useState<boolean>(false);
   const [progress, setProgress] = useState<number>(0);
   
-  const handleStartAttack = () => {
+  const handleStartAttack = async () => {
+    if (!targetNetwork) return;
+    
     setIsAttacking(true);
     setProgress(0);
     
-    // Simulate attack progress
-    const interval = setInterval(() => {
-      setProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setIsAttacking(false);
-          return 100;
-        }
-        return prev + 5;
+    try {
+      const clientMac = allClients ? null : specificMac;
+      const response = await wifiService.deauthAttack(
+        targetNetwork.bssid, 
+        clientMac, 
+        packets
+      );
+      
+      // Simulate attack progress
+      const interval = setInterval(() => {
+        setProgress(prev => {
+          if (prev >= 100) {
+            clearInterval(interval);
+            setIsAttacking(false);
+            
+            toast.success("Attack completed", {
+              description: `Sent ${packets} deauth packets to ${targetNetwork.ssid || 'target network'}`
+            });
+            
+            return 100;
+          }
+          return prev + 5;
+        });
+      }, 300);
+      
+    } catch (error) {
+      console.error("Attack failed:", error);
+      setIsAttacking(false);
+      toast.error("Attack failed", {
+        description: "Check console for details"
       });
-    }, 300);
+    }
   };
   
   const handleStopAttack = () => {
     setIsAttacking(false);
+    toast.info("Attack stopped", {
+      description: "Deauthentication attack was stopped by user"
+    });
   };
 
   if (!targetNetwork) return null;
