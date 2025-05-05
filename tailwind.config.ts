@@ -1,3 +1,4 @@
+
 import type { Config } from "tailwindcss";
 
 export default {
@@ -61,6 +62,17 @@ export default {
 					'accent-foreground': 'hsl(var(--sidebar-accent-foreground))',
 					border: 'hsl(var(--sidebar-border))',
 					ring: 'hsl(var(--sidebar-ring))'
+				},
+				// Cybersecurity theme colors
+				cyber: {
+					blue: '#00b2ff',
+					red: '#ff3e3e',
+					green: '#00ff9d',
+					purple: '#8b5cf6',
+					dark: '#0f1219',
+					darker: '#070a10',
+					gray: '#2d3748',
+					lightgray: '#4a5568',
 				}
 			},
 			borderRadius: {
@@ -84,11 +96,27 @@ export default {
 					to: {
 						height: '0'
 					}
+				},
+				'pulse-signal': {
+					'0%, 100%': { opacity: '1' },
+					'50%': { opacity: '0.5' }
+				},
+				'signal-wave': {
+					'0%': {
+						transform: 'scale(0)',
+						opacity: '1'
+					},
+					'100%': {
+						transform: 'scale(1.5)',
+						opacity: '0'
+					}
 				}
 			},
 			animation: {
 				'accordion-down': 'accordion-down 0.2s ease-out',
-				'accordion-up': 'accordion-up 0.2s ease-out'
+				'accordion-up': 'accordion-up 0.2s ease-out',
+				'pulse-signal': 'pulse-signal 1.5s ease-in-out infinite',
+				'signal-wave': 'signal-wave 1.5s ease-out infinite'
 			}
 		}
 	},
