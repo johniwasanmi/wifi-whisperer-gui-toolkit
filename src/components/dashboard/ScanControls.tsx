@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Wifi, Loader2, WifiOff } from "lucide-react";
 
 interface ScanControlsProps {
-  onStartScan: (interface: string) => void;
+  onStartScan: (interfaceName: string) => void;
   onStopScan: () => void;
   isScanning: boolean;
 }
