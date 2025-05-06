@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Wifi, Zap, Shield, Terminal, Settings } from "lucide-react";
 import { Link } from "react-router-dom";
+import WatermelonLogo from "@/components/logo/WatermelonLogo";
 
 interface SidebarLayoutProps {
   children: React.ReactNode;
@@ -27,10 +28,10 @@ export default function SidebarLayout({ children }: SidebarLayoutProps) {
       <div className="min-h-screen flex w-full">
         <AppSidebar />
         <main className="flex-1 p-0">
-          <div className="flex items-center p-4 border-b border-cyber-gray">
+          <div className="flex items-center p-4 border-b border-melon-green">
             <SidebarTrigger />
             <div className="ml-4 flex items-center">
-              <span className="font-bold text-lg text-cyber-blue">WiFi Whisperer</span>
+              <span className="font-bold text-lg text-melon-red">WiFiMellon</span>
               <span className="text-xs ml-2 text-muted-foreground">v0.1</span>
             </div>
           </div>
@@ -73,27 +74,25 @@ function AppSidebar() {
   ];
 
   return (
-    <Sidebar className="border-r border-cyber-gray">
+    <Sidebar className="border-r border-melon-darkGreen bg-melon-green/90">
       <SidebarHeader className="p-4">
         <div className="flex items-center space-x-2">
-          <div className="w-8 h-8 rounded-full bg-cyber-blue flex items-center justify-center">
-            <Wifi size={18} className="text-cyber-dark" />
-          </div>
+          <WatermelonLogo size={40} />
           <div>
-            <h3 className="font-bold tracking-tight">WiFi Whisperer</h3>
-            <p className="text-xs text-muted-foreground">Exploitation Framework</p>
+            <h3 className="font-bold tracking-tight text-white">WiFiMellon</h3>
+            <p className="text-xs text-white/70">Exploitation Framework</p>
           </div>
         </div>
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Navigation</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-white/80">Navigation</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {menuItems.map((item) => (
                 <SidebarMenuItem key={item.path}>
                   <SidebarMenuButton asChild>
-                    <Link to={item.path} className="flex items-center">
+                    <Link to={item.path} className="flex items-center text-white hover:bg-melon-darkGreen/50 hover:text-white">
                       <item.icon className="mr-2 h-4 w-4" />
                       <span>{item.title}</span>
                     </Link>
@@ -105,8 +104,8 @@ function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-4">
-        <div className="text-xs text-muted-foreground">
-          <p>WiFi Whisperer &copy; 2025</p>
+        <div className="text-xs text-white/70">
+          <p>WiFiMellon &copy; 2025</p>
           <p>For educational purposes only</p>
         </div>
       </SidebarFooter>

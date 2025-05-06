@@ -66,10 +66,10 @@ const ScanControls = ({ onStartScan, onStopScan, isScanning }: ScanControlsProps
   };
 
   return (
-    <Card className="bg-cyber-dark border-cyber-gray">
+    <Card className="bg-melon-darkGreen/10 border-melon-green shadow-md">
       <CardHeader>
         <div className="flex justify-between items-center">
-          <CardTitle className="text-cyber-blue flex items-center gap-2">
+          <CardTitle className="text-melon-red flex items-center gap-2">
             <Wifi className="h-5 w-5" />
             Network Scanner
           </CardTitle>
@@ -78,23 +78,24 @@ const ScanControls = ({ onStartScan, onStopScan, isScanning }: ScanControlsProps
             size="icon" 
             onClick={fetchInterfaces}
             disabled={isLoading}
+            className="text-melon-darkGreen hover:text-melon-green hover:bg-melon-darkGreen/10"
           >
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
         </div>
-        <CardDescription>
+        <CardDescription className="text-melon-gray">
           Discover wireless networks in your vicinity
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
-          <label className="text-sm font-medium">Interface</label>
+          <label className="text-sm font-medium text-melon-darkGreen">Interface</label>
           <Select
             disabled={isScanning || isLoading}
             value={selectedInterface}
             onValueChange={setSelectedInterface}
           >
-            <SelectTrigger>
+            <SelectTrigger className="border-melon-green/50">
               <SelectValue placeholder="Select interface" />
             </SelectTrigger>
             <SelectContent>
@@ -113,7 +114,7 @@ const ScanControls = ({ onStartScan, onStopScan, isScanning }: ScanControlsProps
               onClick={startMonitorMode}
               disabled={isLoading || isScanning} 
               variant="outline" 
-              className="w-full text-xs"
+              className="w-full text-xs border-melon-green text-melon-darkGreen hover:bg-melon-green/10"
             >
               {isLoading ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : null}
               Enable Monitor Mode
@@ -124,12 +125,12 @@ const ScanControls = ({ onStartScan, onStopScan, isScanning }: ScanControlsProps
         <div className="flex items-center space-x-2">
           {isScanning && (
             <div className="relative w-4 h-4">
-              <div className="absolute inset-0 rounded-full bg-cyber-blue opacity-75 animate-pulse"></div>
-              <div className="signal-ripple"></div>
-              <div className="signal-ripple" style={{ animationDelay: "0.5s" }}></div>
+              <div className="absolute inset-0 rounded-full bg-melon-red opacity-75 animate-pulse"></div>
+              <div className="signal-ripple border-melon-red"></div>
+              <div className="signal-ripple border-melon-red" style={{ animationDelay: "0.5s" }}></div>
             </div>
           )}
-          {isScanning && <span className="text-sm text-cyber-blue">Scanning networks...</span>}
+          {isScanning && <span className="text-sm text-melon-red">Scanning networks...</span>}
         </div>
       </CardContent>
       <CardFooter>
@@ -137,7 +138,7 @@ const ScanControls = ({ onStartScan, onStopScan, isScanning }: ScanControlsProps
           <Button
             onClick={() => onStartScan(selectedInterface)}
             disabled={!selectedInterface || isLoading}
-            className="w-full bg-cyber-blue hover:bg-blue-600 text-black"
+            className="w-full bg-melon-red hover:bg-melon-darkRed text-white"
           >
             <Wifi className="mr-2 h-4 w-4" />
             Start Scanning
@@ -146,7 +147,7 @@ const ScanControls = ({ onStartScan, onStopScan, isScanning }: ScanControlsProps
           <Button
             onClick={onStopScan}
             variant="destructive"
-            className="w-full"
+            className="w-full bg-melon-darkRed hover:bg-melon-red"
           >
             <WifiOff className="mr-2 h-4 w-4" />
             Stop Scanning

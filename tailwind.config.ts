@@ -63,16 +63,17 @@ export default {
 					border: 'hsl(var(--sidebar-border))',
 					ring: 'hsl(var(--sidebar-ring))'
 				},
-				// Cybersecurity theme colors
-				cyber: {
-					blue: '#00b2ff',
-					red: '#ff3e3e',
-					green: '#00ff9d',
-					purple: '#8b5cf6',
-					dark: '#0f1219',
-					darker: '#070a10',
-					gray: '#2d3748',
-					lightgray: '#4a5568',
+				// Watermelon theme colors
+				melon: {
+					green: '#4CAF50', // Outer watermelon green
+					darkGreen: '#2E7D32', // Darker green for accents
+					lightGreen: '#A5D6A7', // Lighter green
+					red: '#FF5252', // Watermelon red/pink
+					darkRed: '#D32F2F', // Darker red/pink
+					lightRed: '#FFCDD2', // Lighter pink
+					black: '#212121', // Watermelon seeds color
+					gray: '#424242', // Dark gray for text
+					lightGray: '#BDBDBD', // Light gray for backgrounds
 				}
 			},
 			borderRadius: {
