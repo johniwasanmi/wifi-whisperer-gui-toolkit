@@ -22,6 +22,7 @@ const InterfaceList = ({ onInterfaceSelect, selectedInterface, isScanning }: Int
     setIsLoading(true);
     try {
       const data = await wifiService.getInterfaces();
+      console.log("Interfaces data:", data); // Debug log
       setInterfaces(data);
     } catch (error) {
       console.error("Failed to fetch interfaces:", error);
@@ -47,14 +48,15 @@ const InterfaceList = ({ onInterfaceSelect, selectedInterface, isScanning }: Int
       
       if (result.success) {
         toast.success(result.message);
-        fetchInterfaces(); // Refresh interfaces
+        // Immediately fetch interfaces to update status
+        await fetchInterfaces();
         
-        // Auto-select the new monitor interface if one was created
+        // Auto-select the monitor interface
         if (result.data?.monitorInterface) {
           onInterfaceSelect(result.data.monitorInterface);
         }
       } else {
-        toast.error("Failed to start monitor mode");
+        toast.error("Failed to start monitor mode: " + (result.message || "Unknown error"));
       }
     } catch (error) {
       console.error("Error starting monitor mode:", error);

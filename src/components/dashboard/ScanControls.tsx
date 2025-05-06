@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Wifi, Loader2, WifiOff, Play, X } from "lucide-react";
@@ -38,6 +38,16 @@ const ScanControls = ({
     beacons: true,
     updateInterval: 1 // seconds
   });
+  
+  // Update scan options when selected interface changes
+  useEffect(() => {
+    if (selectedInterface) {
+      setScanOptions(prev => ({
+        ...prev,
+        interfaceName: selectedInterface
+      }));
+    }
+  }, [selectedInterface]);
 
   const handleStartScan = () => {
     if (!selectedInterface) {

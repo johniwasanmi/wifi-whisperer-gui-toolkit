@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from "react";
 import SidebarLayout from "@/components/layouts/SidebarLayout";
 import NetworkCard from "@/components/dashboard/NetworkCard";
@@ -59,6 +58,7 @@ const Index = () => {
   const fetchInterfaces = async () => {
     try {
       const data = await wifiService.getInterfaces();
+      console.log("Fetched interfaces:", data); // Debug log
       setInterfaces(data);
       
       // Auto-select monitor interfaces if available and none are selected
@@ -66,6 +66,7 @@ const Index = () => {
         const monitorInterface = data.find(iface => iface.status === "monitor");
         if (monitorInterface) {
           setSelectedInterface(monitorInterface.name);
+          addLog(`Auto-selected monitor interface: ${monitorInterface.name}`);
         }
       }
     } catch (error) {
@@ -216,6 +217,7 @@ const Index = () => {
   // Check if selected interface is in monitor mode
   const isSelectedInterfaceMonitor = () => {
     const selectedInterfaceObj = interfaces.find(i => i.name === selectedInterface);
+    console.log("Checking monitor mode for:", selectedInterface, selectedInterfaceObj); // Debug log
     return selectedInterfaceObj?.status === "monitor";
   };
 

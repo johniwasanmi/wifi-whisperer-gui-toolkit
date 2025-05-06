@@ -38,7 +38,9 @@ class WifiService {
       if (!response.ok) {
         throw new Error("Failed to fetch interfaces");
       }
-      return await response.json();
+      const data = await response.json();
+      console.log("Interface data from API:", data); // Debug log
+      return data;
     } catch (error) {
       console.error("Error fetching interfaces:", error);
       
@@ -61,10 +63,13 @@ class WifiService {
       });
       
       if (!response.ok) {
-        throw new Error("Failed to start monitor mode");
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Failed to start monitor mode");
       }
       
-      return await response.json();
+      const result = await response.json();
+      console.log("Start monitor mode result:", result); // Debug log
+      return result;
     } catch (error) {
       console.error("Error starting monitor mode:", error);
       
@@ -72,7 +77,7 @@ class WifiService {
       return {
         success: true,
         message: `Started monitor mode on ${interfaceName}`,
-        data: { monitorInterface: `${interfaceName}mon` }
+        data: { monitorInterface: `${interfaceName}` }
       };
     }
   }
@@ -87,7 +92,8 @@ class WifiService {
       });
       
       if (!response.ok) {
-        throw new Error("Failed to stop monitor mode");
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Failed to stop monitor mode");
       }
       
       return await response.json();

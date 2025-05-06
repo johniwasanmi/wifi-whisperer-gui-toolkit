@@ -1,737 +1,585 @@
-
-import re
-import time
 import json
-import logging
-import os
-import signal
 import subprocess
+import re
 import threading
-import uuid
-from typing import Dict, List, Optional, Any, Tuple
-
-from django.http import JsonResponse
-from asgiref.sync import async_to_sync
+import time
+import os
+from datetime import datetime
 from channels.layers import get_channel_layer
-from rest_framework.views import APIView
-from rest_framework.response import Response
+from asgiref.sync import async_to_sync
 from rest_framework import status
-
+from rest_framework.response import Response
+from rest_framework.views import APIView
 from .serializers import (
-    WifiInterfaceSerializer, 
-    ScanResultSerializer, 
+    WifiInterfaceSerializer,
     MonitorModeSerializer,
-    DeauthAttackSerializer
+    DeauthAttackSerializer,
+    ScanResultSerializer,
+    AirodumpOutputSerializer,
 )
 
-logger = logging.getLogger(__name__)
-active_processes: Dict[str, subprocess.Popen] = {}
-scan_results: Dict[str, Any] = {}
-
 class WifiInterfacesView(APIView):
-    """Get available wireless interfaces using airmon-ng"""
-    
     def get(self, request):
-        # Use airmon-ng instead of iwconfig to get more detailed interface info
-        success, stdout, stderr = self.run_command(['airmon-ng'])
-        if not success:
-            # Fallback to iwconfig if airmon-ng fails
-            logger.warning("airmon-ng failed, falling back to iwconfig")
-            return self.fallback_iwconfig()
-        
         interfaces = []
-        
-        # Parse airmon-ng output
-        # Format: PHY Interface Driver Chipset
-        lines = stdout.strip().split('\n')
-        
-        # Skip header lines
-        for line in lines:
-            if "PHY" in line and "Interface" in line and "Driver" in line and "Chipset" in line:
-                continue
+        try:
+            # First, get all wireless interfaces
+            proc = subprocess.Popen(['iwconfig'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            out, err = proc.communicate()
+            output = out.decode('utf-8')
             
-            # Skip empty lines
-            if not line.strip():
-                continue
-            
-            # Parse line
-            parts = line.split('\t')
-            if len(parts) >= 4:
-                phy = parts[0].strip()
-                interface = parts[1].strip()
-                driver = parts[2].strip()
-                chipset = ' '.join(part.strip() for part in parts[3:]).strip()
-                
-                # Skip if no interface name
-                if not interface:
+            # Parse the output to find interfaces
+            interface_sections = output.split('\n\n')
+            for section in interface_sections:
+                if not section.strip():
                     continue
                 
-                # Determine if interface is in monitor mode
-                mode = "monitor" if "mon" in interface else "normal"
+                lines = section.strip().split('\n')
+                if not lines:
+                    continue
                 
-                interfaces.append({
-                    "name": interface,
-                    "driver": driver,
-                    "chipset": chipset,
-                    "status": mode,
-                    "phy": phy
-                })
-        
-        # If no interfaces found, add mock interfaces for testing
-        if not interfaces:
-            interfaces = [
-                {"name": "wlan0", "driver": "iwlwifi", "chipset": "Intel", "status": "normal", "phy": "phy0"},
-                {"name": "wlan1", "driver": "rtl8812au", "chipset": "Realtek", "status": "normal", "phy": "phy1"}
-            ]
-        
-        serializer = WifiInterfaceSerializer(interfaces, many=True)
-        return Response(serializer.data)
-    
-    def fallback_iwconfig(self):
-        """Fallback to using iwconfig if airmon-ng is not available"""
-        success, stdout, stderr = self.run_command(['iwconfig'])
-        if not success:
-            return Response({"error": stderr}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-        interfaces = []
-        current_interface = None
-        
-        for line in stdout.split('\n'):
-            if line and not line.startswith(' '):
-                # New interface found
-                interface_match = re.match(r'^(\w+)', line)
-                if interface_match:
-                    current_interface = interface_match.group(1)
+                # Get interface name from the first line
+                interface_line = lines[0]
+                interface_match = re.match(r'^(\w+)', interface_line)
+                if not interface_match:
+                    continue
+                
+                interface_name = interface_match.group(1)
+                
+                # Check if in monitor mode
+                is_monitor = "Mode:Monitor" in section
+                
+                # Get driver and chipset information
+                try:
+                    driver_info = subprocess.check_output(
+                        ['ethtool', '-i', interface_name], 
+                        stderr=subprocess.STDOUT
+                    ).decode('utf-8')
                     
-                    # Check if it's a wireless interface
-                    if 'no wireless extensions' not in line:
-                        # Get additional info
-                        success, driver_info, _ = self.run_command(['ethtool', '-i', current_interface])
-                        driver = "unknown"
-                        chipset = "unknown"
+                    driver_match = re.search(r'driver:\s*(\S+)', driver_info)
+                    driver = driver_match.group(1) if driver_match else "Unknown"
+                    
+                    # Try to get chipset info from device
+                    try:
+                        pci_info = subprocess.check_output(
+                            ['lspci', '-v'], 
+                            stderr=subprocess.STDOUT
+                        ).decode('utf-8')
                         
-                        if success:
-                            driver_match = re.search(r'driver:\s+(\w+)', driver_info)
-                            if driver_match:
-                                driver = driver_match.group(1)
+                        for line in pci_info.split('\n'):
+                            if interface_name in line or driver in line:
+                                chipset = line.strip()
+                                break
+                        else:
+                            chipset = "Unknown"
+                    except:
+                        chipset = "Unknown"
                         
-                        # Determine if interface is in monitor mode
-                        mode = "normal"
-                        if "Mode:Monitor" in line:
-                            mode = "monitor"
-                        
-                        interfaces.append({
-                            "name": current_interface,
-                            "driver": driver,
-                            "chipset": chipset,
-                            "status": mode,
-                            "phy": "unknown"
-                        })
-        
-        # If no interfaces found, add mock interfaces for testing
-        if not interfaces:
-            interfaces = [
-                {"name": "wlan0", "driver": "iwlwifi", "chipset": "Intel", "status": "normal", "phy": "phy0"},
-                {"name": "wlan1", "driver": "rtl8812au", "chipset": "Realtek", "status": "normal", "phy": "phy1"}
-            ]
-        
-        serializer = WifiInterfaceSerializer(interfaces, many=True)
-        return Response(serializer.data)
-
-    def run_command(self, command: List[str]) -> Tuple[bool, str, Optional[str]]:
-        """Run a shell command and return its output."""
-        try:
-            logger.info(f"Running command: {' '.join(command)}")
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
-            return True, result.stdout, None
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Command failed with exit code {e.returncode}: {e.stderr}")
-            return False, "", e.stderr
+                except subprocess.CalledProcessError:
+                    driver = "Unknown"
+                    chipset = "Unknown"
+                
+                # Add interface to list
+                interfaces.append({
+                    'name': interface_name,
+                    'driver': driver,
+                    'chipset': chipset,
+                    'status': "monitor" if is_monitor else "normal",
+                    'phy': ""  # Optional field
+                })
+                
+            return Response(interfaces)
         except Exception as e:
-            logger.error(f"Error executing command: {str(e)}")
-            return False, "", str(e)
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class MonitorModeStartView(APIView):
-    """Start monitor mode on a wireless interface"""
-    
     def post(self, request):
         serializer = MonitorModeSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-            
-        interface = serializer.validated_data['interface']
-        
-        # Kill potentially interfering processes
-        self.run_command(['airmon-ng', 'check', 'kill'])
-        
-        # Start monitor mode
-        success, stdout, stderr = self.run_command(['airmon-ng', 'start', interface])
-        
-        if not success:
-            return Response({"error": stderr}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-        # Parse the output to get the monitor interface name
-        monitor_interface = f"{interface}mon"  # Default naming convention
-        match = re.search(r'(monitor mode enabled on|monitor mode vif enabled for) (\w+)', stdout)
-        if match:
-            monitor_interface = match.group(2)
-        
-        # Broadcast interface update via WebSocket
-        try:
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                "interface_updates",
-                {
-                    'type': 'interface_update',
-                    'message': 'Interface status changed'
-                }
-            )
-        except Exception as e:
-            logger.error(f"Error broadcasting interface update: {str(e)}")
-        
-        return Response({
-            "success": True,
-            "message": f"Started monitor mode on {interface}",
-            "data": {
-                "monitorInterface": monitor_interface
-            }
-        })
-
-    def run_command(self, command: List[str]) -> Tuple[bool, str, Optional[str]]:
-        """Run a shell command and return its output."""
-        try:
-            logger.info(f"Running command: {' '.join(command)}")
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
-            return True, result.stdout, None
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Command failed with exit code {e.returncode}: {e.stderr}")
-            return False, "", e.stderr
-        except Exception as e:
-            logger.error(f"Error executing command: {str(e)}")
-            return False, "", str(e)
+        if serializer.is_valid():
+            interface = serializer.validated_data['interface']
+            try:
+                # First, bring the interface down
+                subprocess.check_output(['sudo', 'ifconfig', interface, 'down'])
+                
+                # Set to monitor mode
+                subprocess.check_output(['sudo', 'iwconfig', interface, 'mode', 'monitor'])
+                
+                # Bring the interface up again
+                subprocess.check_output(['sudo', 'ifconfig', interface, 'up'])
+                
+                # Check if the mode was changed successfully
+                iwconfig_output = subprocess.check_output(['iwconfig', interface]).decode('utf-8')
+                
+                if "Mode:Monitor" in iwconfig_output:
+                    return Response({
+                        "success": True,
+                        "message": f"Interface {interface} is now in monitor mode",
+                        "data": {
+                            "monitorInterface": interface
+                        }
+                    })
+                else:
+                    return Response({
+                        "success": False,
+                        "message": f"Failed to set {interface} to monitor mode"
+                    }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    
+            except subprocess.CalledProcessError as e:
+                error_output = e.output.decode('utf-8') if hasattr(e, 'output') else str(e)
+                return Response({
+                    "success": False,
+                    "message": f"Error setting monitor mode: {error_output}"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            except Exception as e:
+                return Response({
+                    "success": False,
+                    "message": f"Error: {str(e)}"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class MonitorModeStopView(APIView):
-    """Stop monitor mode on a wireless interface"""
-    
     def post(self, request):
         serializer = MonitorModeSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-            
-        interface = serializer.validated_data['interface']
-        
-        success, stdout, stderr = self.run_command(['airmon-ng', 'stop', interface])
-        
-        if not success:
-            return Response({"error": stderr}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
-        # Broadcast interface update via WebSocket
-        try:
-            channel_layer = get_channel_layer()
-            async_to_sync(channel_layer.group_send)(
-                "interface_updates",
-                {
-                    'type': 'interface_update',
-                    'message': 'Interface status changed'
-                }
-            )
-        except Exception as e:
-            logger.error(f"Error broadcasting interface update: {str(e)}")
-        
-        return Response({
-            "success": True,
-            "message": f"Stopped monitor mode on {interface}"
-        })
-
-    def run_command(self, command: List[str]) -> Tuple[bool, str, Optional[str]]:
-        """Run a shell command and return its output."""
-        try:
-            logger.info(f"Running command: {' '.join(command)}")
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
-            return True, result.stdout, None
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Command failed with exit code {e.returncode}: {e.stderr}")
-            return False, "", e.stderr
-        except Exception as e:
-            logger.error(f"Error executing command: {str(e)}")
-            return False, "", str(e)
+        if serializer.is_valid():
+            interface = serializer.validated_data['interface']
+            try:
+                # First, bring the interface down
+                subprocess.check_output(['sudo', 'ifconfig', interface, 'down'])
+                
+                # Set to managed mode
+                subprocess.check_output(['sudo', 'iwconfig', interface, 'mode', 'managed'])
+                
+                # Bring the interface up again
+                subprocess.check_output(['sudo', 'ifconfig', interface, 'up'])
+                
+                return Response({
+                    "success": True,
+                    "message": f"Interface {interface} is now in managed mode"
+                })
+            except subprocess.CalledProcessError as e:
+                error_output = e.output.decode('utf-8') if hasattr(e, 'output') else str(e)
+                return Response({
+                    "success": False,
+                    "message": f"Error setting managed mode: {error_output}"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            except Exception as e:
+                return Response({
+                    "success": False,
+                    "message": f"Error: {str(e)}"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class ScanNetworksView(APIView):
-    """Scan for wireless networks using airodump-ng"""
-    
     def post(self, request):
         serializer = MonitorModeSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        if serializer.is_valid():
+            interface = serializer.validated_data['interface']
             
-        interface = serializer.validated_data['interface']
-        
-        # Check if interface is in monitor mode
-        success, stdout, stderr = self.run_command(['iwconfig', interface])
-        if not success or "Mode:Monitor" not in stdout:
-            return Response({
-                "error": "Interface is not in monitor mode", 
-                "details": stderr or "Run airmon-ng start on the interface first"
-            }, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Generate a unique ID for this scan
-        scan_id = str(uuid.uuid4())
-        output_file = f"/tmp/scan_{scan_id}"
-        
-        # Start airodump-ng in a background process and broadcast updates via WebSockets
-        self.start_scan_process(scan_id, interface, output_file)
-        
-        return Response({
-            "success": True,
-            "message": f"Scan started on {interface}",
-            "scan_id": scan_id
-        })
-
-    def start_scan_process(self, scan_id: str, interface: str, output_file: str):
-        """Start the scan process in a background thread and broadcast updates via WebSockets"""
-        def scan_thread():
-            cmd = ['airodump-ng', '--output-format', 'csv', '--write', output_file, interface]
-            
+            # Check if interface is in monitor mode
             try:
-                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                active_processes[scan_id] = process
+                iwconfig_output = subprocess.check_output(['iwconfig', interface]).decode('utf-8')
+                if "Mode:Monitor" not in iwconfig_output:
+                    return Response({
+                        "success": False,
+                        "message": f"Interface {interface} is not in monitor mode"
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            except subprocess.CalledProcessError:
+                return Response({
+                    "success": False,
+                    "message": f"Failed to check interface {interface} mode"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+            # Start airodump-ng in a separate thread
+            try:
+                # Create output directory if it doesn't exist
+                output_dir = os.path.join(os.getcwd(), 'captures')
+                os.makedirs(output_dir, exist_ok=True)
                 
-                # Check for results every 2 seconds
-                while scan_id in active_processes:
-                    # Parse the CSV file if it exists
-                    networks, clients = self.parse_csv_results(f"{output_file}-01.csv")
-                    
-                    # Broadcast results via WebSocket
-                    if networks or clients:
-                        channel_layer = get_channel_layer()
-                        async_to_sync(channel_layer.group_send)(
-                            "scan_updates",
-                            {
-                                'type': 'scan_update',
-                                'networks': networks,
-                                'clients': clients
-                            }
-                        )
-                    
-                    time.sleep(2)
-                    
-                # Clean up process
-                if not process.poll():
-                    process.terminate()
-                    process.wait(timeout=5)
+                # Generate timestamp for unique filename
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_file = os.path.join(output_dir, f"scan_{timestamp}")
                 
-                # Clean up the temporary files
-                for ext in ['-01.csv', '-01.kismet.csv', '-01.kismet.netxml', '-01.cap']:
-                    file_path = f"{output_file}{ext}"
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-                        
+                # Start airodump-ng process
+                cmd = [
+                    'sudo', 'airodump-ng',
+                    '--write', output_file,
+                    '--output-format', 'csv',
+                    interface
+                ]
+                
+                # Start process in background
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                
+                # Store process ID for later termination
+                from django.core.cache import cache
+                cache.set('airodump_process_id', process.pid, timeout=None)
+                cache.set('airodump_output_file', f"{output_file}-01.csv", timeout=None)
+                
+                # Start a thread to read and process the CSV file
+                def process_csv():
+                    time.sleep(2)  # Wait for airodump to create the file
+                    
+                    try:
+                        while True:
+                            # Check if process is still running
+                            if process.poll() is not None:
+                                break
+                                
+                            # Read and parse CSV file
+                            csv_file = f"{output_file}-01.csv"
+                            if os.path.exists(csv_file):
+                                networks, clients = parse_airodump_csv(csv_file)
+                                
+                                # Send updates via WebSocket
+                                channel_layer = get_channel_layer()
+                                async_to_sync(channel_layer.group_send)(
+                                    "scan_updates",
+                                    {
+                                        "type": "scan_update",
+                                        "networks": networks,
+                                        "clients": clients
+                                    }
+                                )
+                            
+                            time.sleep(1)  # Update interval
+                    except Exception as e:
+                        print(f"Error in CSV processing thread: {str(e)}")
+                
+                # Start the processing thread
+                csv_thread = threading.Thread(target=process_csv)
+                csv_thread.daemon = True
+                csv_thread.start()
+                
+                return Response({
+                    "success": True,
+                    "message": f"Started scanning on {interface}",
+                    "data": {
+                        "scanId": timestamp,
+                        "outputFile": f"{output_file}-01.csv"
+                    }
+                })
+                
             except Exception as e:
-                logger.error(f"Error in scan thread: {str(e)}")
-                if scan_id in active_processes:
-                    del active_processes[scan_id]
+                return Response({
+                    "success": False,
+                    "message": f"Error starting scan: {str(e)}"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
-        # Start the thread
-        thread = threading.Thread(target=scan_thread)
-        thread.daemon = True
-        thread.start()
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
-    def parse_csv_results(self, csv_file: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Parse the airodump-ng CSV output file to extract network and client information"""
-        networks = []
-        clients = []
+    def delete(self, request):
+        # Stop airodump-ng process
+        from django.core.cache import cache
+        process_id = cache.get('airodump_process_id')
         
-        if not os.path.exists(csv_file):
-            return networks, clients
-            
-        try:
-            with open(csv_file, 'r') as f:
-                lines = f.readlines()
-            
-            # Parse networks section
-            network_section = True
-            current_line = 0
-            
-            while current_line < len(lines):
-                line = lines[current_line].strip()
-                current_line += 1
-                
-                if line == "":
-                    network_section = False
-                    # Skip the client header line
-                    current_line += 1
-                    break
-                
-                if network_section and "BSSID" not in line and line:
-                    # Parse network info
-                    parts = line.split(',')
-                    if len(parts) >= 14:
-                        bssid = parts[0].strip()
-                        first_seen = parts[1].strip()
-                        last_seen = parts[2].strip()
-                        channel = parts[5].strip()
-                        speed = parts[6].strip()
-                        privacy = parts[7].strip()
-                        power = parts[8].strip()
-                        beacons = parts[9].strip()
-                        iv_packets = parts[10].strip()
-                        lan_ip = parts[11].strip()
-                        id_length = parts[12].strip()
-                        essid = parts[13].strip()
-                        
-                        try:
-                            signal = abs(int(power))
-                        except ValueError:
-                            signal = 0
-                            
-                        try:
-                            channel_num = int(channel)
-                        except ValueError:
-                            channel_num = 0
-                        
-                        # Determine encryption type from privacy field
-                        encryption = "OPEN"
-                        if "WPA3" in privacy:
-                            encryption = "WPA3"
-                        elif "WPA2" in privacy:
-                            encryption = "WPA2"
-                        elif "WPA" in privacy:
-                            encryption = "WPA"
-                        elif "WEP" in privacy:
-                            encryption = "WEP"
-                            
-                        # Create network object
-                        network = {
-                            "id": str(len(networks) + 1),
-                            "ssid": essid if essid != "" else "",
-                            "bssid": bssid,
-                            "channel": channel_num,
-                            "signal": min(signal, 100),  # Cap at 100
-                            "encryption": encryption,
-                            "vendor": bssid[:8].upper(),  # Would need a proper OUI database
-                            "clients": 0,  # Will be updated after parsing clients
-                            "firstSeen": int(time.mktime(time.strptime(first_seen, "%Y-%m-%d %H:%M:%S")) * 1000),
-                            "lastSeen": int(time.mktime(time.strptime(last_seen, "%Y-%m-%d %H:%M:%S")) * 1000)
-                        }
-                        networks.append(network)
-            
-            # Parse clients section - starts after the first empty line
-            while current_line < len(lines):
-                line = lines[current_line].strip()
-                current_line += 1
-                
-                if "Station MAC" not in line and line:
-                    # Parse client info
-                    parts = line.split(',')
-                    if len(parts) >= 6:
-                        mac = parts[0].strip()
-                        first_seen = parts[1].strip()
-                        last_seen = parts[2].strip()
-                        power = parts[3].strip()
-                        packets = parts[4].strip()
-                        bssid = parts[5].strip()
-                        
-                        # Parse probe requests
-                        probe = []
-                        if len(parts) > 6:
-                            probes = ','.join(parts[6:]).strip()
-                            if probes:
-                                probe = [p.strip() for p in probes.split(',')]
-                        
-                        try:
-                            signal_power = abs(int(power))
-                        except ValueError:
-                            signal_power = 0
-                        
-                        try:
-                            packet_count = int(packets)
-                        except ValueError:
-                            packet_count = 0
-                        
-                        # Create client object
-                        client = {
-                            "mac": mac,
-                            "bssid": bssid,
-                            "power": min(signal_power, 100),  # Cap at 100
-                            "rate": "0-0",  # Not available in CSV, would need to parse real-time
-                            "lost": 0,  # Not available in CSV, would need to parse real-time
-                            "frames": packet_count,
-                            "probe": probe,
-                            "vendor": mac[:8].upper(),  # Would need a proper OUI database
-                            "firstSeen": int(time.mktime(time.strptime(first_seen, "%Y-%m-%d %H:%M:%S")) * 1000),
-                            "lastSeen": int(time.mktime(time.strptime(last_seen, "%Y-%m-%d %H:%M:%S")) * 1000)
-                        }
-                        clients.append(client)
-                        
-                        # Update client count for the associated AP
-                        if bssid != "(not associated)":
-                            for network in networks:
-                                if network["bssid"] == bssid:
-                                    network["clients"] += 1
-                                    break
-            
-        except Exception as e:
-            logger.error(f"Error parsing CSV file: {str(e)}")
-        
-        return networks, clients
-    
-    def run_command(self, command: List[str]) -> Tuple[bool, str, Optional[str]]:
-        """Run a shell command and return its output."""
-        try:
-            logger.info(f"Running command: {' '.join(command)}")
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
-            return True, result.stdout, None
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Command failed with exit code {e.returncode}: {e.stderr}")
-            return False, "", e.stderr
-        except Exception as e:
-            logger.error(f"Error executing command: {str(e)}")
-            return False, "", str(e)
+        if process_id:
+            try:
+                # Kill the process
+                subprocess.call(['sudo', 'kill', '-9', str(process_id)])
+                cache.delete('airodump_process_id')
+                return Response({
+                    "success": True,
+                    "message": "Scan stopped successfully"
+                })
+            except Exception as e:
+                return Response({
+                    "success": False,
+                    "message": f"Error stopping scan: {str(e)}"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        else:
+            return Response({
+                "success": False,
+                "message": "No active scan to stop"
+            }, status=status.HTTP_404_NOT_FOUND)
 
 class DeauthAttackView(APIView):
-    """Perform a deauthentication attack using aireplay-ng"""
-    
     def post(self, request):
         serializer = DeauthAttackSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
-        bssid = serializer.validated_data['bssid']
-        client_mac = serializer.validated_data.get('clientMac', 'FF:FF:FF:FF:FF:FF')
-        packets = serializer.validated_data.get('packets', 10)
-        
-        # Get the first monitor mode interface
-        success, stdout, stderr = self.run_command(['iwconfig'])
-        monitor_interface = None
-        
-        if success:
-            for line in stdout.split('\n'):
-                if 'Mode:Monitor' in line:
-                    monitor_match = re.match(r'^(\w+)', line)
-                    if monitor_match:
-                        monitor_interface = monitor_match.group(1)
-                        break
-        
-        if not monitor_interface:
-            return Response({"error": "No monitor mode interface found"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Run the deauth attack
-        attack_id = str(uuid.uuid4())
-        self.run_deauth_attack(attack_id, monitor_interface, bssid, client_mac, packets)
-        
-        return Response({
-            "success": True,
-            "message": f"Deauthentication attack started",
-            "data": {"attackId": attack_id}
-        })
-
-    def run_command(self, command: List[str]) -> Tuple[bool, str, Optional[str]]:
-        """Run a shell command and return its output."""
-        try:
-            logger.info(f"Running command: {' '.join(command)}")
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
-            return True, result.stdout, None
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Command failed with exit code {e.returncode}: {e.stderr}")
-            return False, "", e.stderr
-        except Exception as e:
-            logger.error(f"Error executing command: {str(e)}")
-            return False, "", str(e)
-
-    def run_deauth_attack(self, attack_id: str, interface: str, bssid: str, client_mac: str, packets: int):
-        """Run deauth attack in a separate thread"""
-        def attack_thread():
-            cmd = ['aireplay-ng', '--deauth', str(packets), '-a', bssid]
+        if serializer.is_valid():
+            bssid = serializer.validated_data['bssid']
+            client_mac = serializer.validated_data.get('clientMac', 'FF:FF:FF:FF:FF:FF')
+            packets = serializer.validated_data.get('packets', 10)
             
-            # If targeting a specific client
-            if client_mac and client_mac != 'FF:FF:FF:FF:FF:FF':
-                cmd.extend(['-c', client_mac])
-                
-            cmd.append(interface)
-            
+            # Get the first monitor mode interface
             try:
-                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                active_processes[attack_id] = process
+                proc = subprocess.Popen(['iwconfig'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                out, err = proc.communicate()
+                output = out.decode('utf-8')
                 
-                # Wait for the process to complete
-                stdout, stderr = process.communicate()
+                monitor_interface = None
+                interface_sections = output.split('\n\n')
+                for section in interface_sections:
+                    if "Mode:Monitor" in section:
+                        interface_match = re.match(r'^(\w+)', section)
+                        if interface_match:
+                            monitor_interface = interface_match.group(1)
+                            break
                 
-                if process.returncode != 0:
-                    logger.error(f"Deauth attack failed: {stderr.decode('utf-8')}")
-                else:
-                    logger.info(f"Deauth attack completed successfully")
+                if not monitor_interface:
+                    return Response({
+                        "success": False,
+                        "message": "No monitor mode interface available"
+                    }, status=status.HTTP_400_BAD_REQUEST)
                     
-                # Clean up
-                if attack_id in active_processes:
-                    del active_processes[attack_id]
+                # Execute deauth attack
+                cmd = [
+                    'sudo', 'aireplay-ng',
+                    '--deauth', str(packets),
+                    '-a', bssid
+                ]
+                
+                # If specific client is targeted
+                if client_mac and client_mac != 'FF:FF:FF:FF:FF:FF':
+                    cmd.extend(['-c', client_mac])
+                    
+                cmd.append(monitor_interface)
+                
+                # Run the command
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                
+                # Wait for completion with timeout
+                try:
+                    stdout, stderr = process.communicate(timeout=10)
+                    if process.returncode == 0:
+                        return Response({
+                            "success": True,
+                            "message": f"Deauth attack completed against {bssid}"
+                        })
+                    else:
+                        return Response({
+                            "success": False,
+                            "message": f"Deauth attack failed: {stderr.decode('utf-8')}"
+                        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    return Response({
+                        "success": True,
+                        "message": f"Deauth attack initiated against {bssid}"
+                    })
                     
             except Exception as e:
-                logger.error(f"Error during deauth attack: {str(e)}")
-                if attack_id in active_processes:
-                    del active_processes[attack_id]
-        
-        # Start the thread
-        thread = threading.Thread(target=attack_thread)
-        thread.daemon = True
-        thread.start()
-
-class AirodumpOutputView(APIView):
-    """Parse airodump-ng output directly from terminal output"""
-    
-    def post(self, request):
-        if not request.data.get('output'):
-            return Response({"error": "Output data is required"}, status=status.HTTP_400_BAD_REQUEST)
-            
-        output = request.data.get('output')
-        
-        # Parse the output into networks and clients
-        networks, clients = self.parse_airodump_output(output)
-        
-        return Response({
-            "success": True,
-            "networks": networks,
-            "clients": clients
-        })
-    
-    def parse_airodump_output(self, output: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Parse airodump-ng terminal output into network and client lists"""
-        networks = []
-        clients = []
-        
-        lines = output.strip().split('\n')
-        network_section = False
-        client_section = False
-        
-        for line in lines:
-            line = line.strip()
-            
-            # Skip empty lines
-            if not line:
-                continue
+                return Response({
+                    "success": False,
+                    "message": f"Error executing deauth attack: {str(e)}"
+                }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
                 
-            # Check for section headers
-            if "BSSID              PWR" in line:
-                network_section = True
-                client_section = False
-                continue
-                
-            if "BSSID              STATION" in line:
-                network_section = False
-                client_section = True
-                continue
-                
-            # Parse network line
-            if network_section and not line.startswith("BSSID"):
-                try:
-                    # Example: 00:14:6C:7A:41:81   34 100       57       14    1   9  11e  WEP  WEP         bigbear 
-                    parts = line.split()
-                    if len(parts) >= 11:
-                        bssid = parts[0]
-                        signal = abs(int(parts[1])) if parts[1] != "-1" else 0
-                        beacons = int(parts[3]) if parts[3].isdigit() else 0
-                        data = int(parts[4]) if parts[4].isdigit() else 0
-                        channel = int(parts[6]) if parts[6].isdigit() else 0
-                        
-                        # Extract encryption and cipher
-                        enc_idx = 8
-                        cipher_idx = 9
-                        auth_idx = 10
-                        ssid_idx = 11
-                        
-                        # Check if MB has an 'e' suffix indicating QoS
-                        if 'e' in parts[7]:
-                            enc_idx = 8
-                            cipher_idx = 9
-                            auth_idx = 10
-                            ssid_idx = 11
-                        
-                        encryption = parts[enc_idx] if len(parts) > enc_idx else "OPN"
-                        
-                        # Get ESSID - it might contain spaces, so join the remaining parts
-                        ssid = ' '.join(parts[ssid_idx:]) if len(parts) > ssid_idx else ""
-                        
-                        # Map encryption values
-                        if encryption == "WPA3":
-                            enc_type = "WPA3"
-                        elif encryption == "WPA2":
-                            enc_type = "WPA2"
-                        elif encryption == "WPA":
-                            enc_type = "WPA"
-                        elif encryption == "WEP":
-                            enc_type = "WEP"
-                        else:
-                            enc_type = "OPEN"
-                            
-                        # Create network object
-                        network = {
-                            "id": str(len(networks) + 1),
-                            "ssid": ssid,
-                            "bssid": bssid,
-                            "channel": channel,
-                            "signal": min(signal, 100),  # Cap at 100
-                            "encryption": enc_type,
-                            "vendor": bssid[:8].upper(),  # Would need a proper OUI database
-                            "clients": 0,
-                            "firstSeen": int(time.time() * 1000),
-                            "lastSeen": int(time.time() * 1000)
-                        }
-                        networks.append(network)
-                except Exception as e:
-                    logger.error(f"Error parsing network line: {line}, Error: {str(e)}")
-                    
-            # Parse client line
-            if client_section and not line.startswith("BSSID"):
-                try:
-                    # Example: 00:14:6C:7A:41:81  00:0F:B5:32:31:31   51   36-24    2       14           
-                    parts = line.split()
-                    if len(parts) >= 6:
-                        bssid = parts[0]
-                        mac = parts[1]
-                        power = abs(int(parts[2])) if parts[2] != "-1" else 0
-                        rate = parts[3]
-                        lost = int(parts[4]) if parts[4].isdigit() else 0
-                        frames = int(parts[5]) if parts[5].isdigit() else 0
-                        
-                        # Check for probes
-                        probe_idx = 7  # Typical index after "Notes" column
-                        probes = []
-                        
-                        if len(parts) > probe_idx:
-                            probes = ' '.join(parts[probe_idx:]).split(',')
-                            probes = [p.strip() for p in probes]
-                        
-                        # Create client object
-                        client = {
-                            "mac": mac,
-                            "bssid": bssid,
-                            "power": min(power, 100),  # Cap at 100
-                            "rate": rate,
-                            "lost": lost,
-                            "frames": frames,
-                            "probe": probes,
-                            "vendor": mac[:8].upper(),  # Would need a proper OUI database
-                            "firstSeen": int(time.time() * 1000),
-                            "lastSeen": int(time.time() * 1000)
-                        }
-                        clients.append(client)
-                        
-                        # Update client count for the associated AP
-                        if bssid != "(not associated)":
-                            for network in networks:
-                                if network["bssid"] == bssid:
-                                    network["clients"] += 1
-                                    break
-                except Exception as e:
-                    logger.error(f"Error parsing client line: {line}, Error: {str(e)}")
-        
-        return networks, clients
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class StatusView(APIView):
-    """Get the status of the backend server"""
-    
     def get(self, request):
-        return Response({
-            "status": "running",
-            "activeProcesses": len(active_processes),
-            "version": "0.2.0"
-        })
+        try:
+            # Check if airodump is running
+            from django.core.cache import cache
+            process_id = cache.get('airodump_process_id')
+            
+            active_processes = 0
+            if process_id:
+                try:
+                    # Check if process exists
+                    os.kill(int(process_id), 0)
+                    active_processes = 1
+                except OSError:
+                    # Process doesn't exist
+                    cache.delete('airodump_process_id')
+            
+            return Response({
+                "status": "running",
+                "activeProcesses": active_processes,
+                "version": "1.0.0"
+            })
+        except Exception as e:
+            return Response({
+                "status": "error",
+                "message": str(e),
+                "version": "1.0.0"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class AirodumpOutputView(APIView):
+    def get(self, request):
+        from django.core.cache import cache
+        output_file = cache.get('airodump_output_file')
+        
+        if not output_file or not os.path.exists(output_file):
+            return Response({
+                "output": "No scan data available"
+            })
+        
+        try:
+            with open(output_file, 'r') as f:
+                content = f.read()
+                
+            return Response({
+                "output": content
+            })
+        except Exception as e:
+            return Response({
+                "output": f"Error reading scan data: {str(e)}"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+def parse_airodump_csv(csv_file):
+    """Parse airodump-ng CSV output file and return networks and clients"""
+    networks = []
+    clients = []
+    
+    try:
+        with open(csv_file, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+            
+        # Split the file into networks and clients sections
+        sections = content.split('\r\n\r\n')
+        if len(sections) < 2:
+            return networks, clients
+            
+        networks_section = sections[0]
+        clients_section = sections[1]
+        
+        # Parse networks
+        network_lines = networks_section.split('\r\n')
+        if len(network_lines) > 1:
+            headers = network_lines[0].split(',')
+            
+            for line in network_lines[1:]:
+                if not line.strip():
+                    continue
+                    
+                fields = line.split(',')
+                if len(fields) < 14:
+                    continue
+                    
+                # Extract network data
+                bssid = fields[0].strip()
+                first_seen = int(datetime.strptime(fields[1].strip(), '%Y-%m-%d %H:%M:%S').timestamp())
+                last_seen = int(datetime.strptime(fields[2].strip(), '%Y-%m-%d %H:%M:%S').timestamp())
+                channel = int(fields[3].strip()) if fields[3].strip().isdigit() else 0
+                speed = fields[4].strip()
+                privacy = fields[5].strip()
+                cipher = fields[6].strip()
+                authentication = fields[7].strip()
+                power = int(fields[8].strip()) if fields[8].strip().lstrip('-').isdigit() else 0
+                beacons = int(fields[9].strip()) if fields[9].strip().isdigit() else 0
+                iv = int(fields[10].strip()) if fields[10].strip().isdigit() else 0
+                lan_ip = fields[11].strip()
+                id_length = int(fields[12].strip()) if fields[12].strip().isdigit() else 0
+                essid = fields[13].strip()
+                
+                # Normalize signal strength (convert negative dBm to percentage)
+                signal = min(100, max(0, int((100 + power) * 2))) if power < 0 else 0
+                
+                # Get vendor from MAC address (first 3 bytes)
+                vendor = "Unknown"
+                if bssid and len(bssid) >= 8:
+                    oui = bssid.replace(':', '').upper()[:6]
+                    # In a real implementation, you would look up the OUI in a database
+                    # For now, we'll just use a placeholder
+                    vendor = get_vendor_from_mac(bssid)
+                
+                networks.append({
+                    'id': bssid.replace(':', ''),
+                    'bssid': bssid,
+                    'ssid': essid,
+                    'channel': channel,
+                    'signal': signal,
+                    'encryption': privacy,
+                    'vendor': vendor,
+                    'clients': 0,  # Will be updated later
+                    'firstSeen': first_seen,
+                    'lastSeen': last_seen
+                })
+        
+        # Parse clients
+        client_lines = clients_section.split('\r\n')
+        if len(client_lines) > 1:
+            headers = client_lines[0].split(',')
+            
+            for line in client_lines[1:]:
+                if not line.strip():
+                    continue
+                    
+                fields = line.split(',')
+                if len(fields) < 7:
+                    continue
+                    
+                # Extract client data
+                mac = fields[0].strip()
+                first_seen = int(datetime.strptime(fields[1].strip(), '%Y-%m-%d %H:%M:%S').timestamp())
+                last_seen = int(datetime.strptime(fields[2].strip(), '%Y-%m-%d %H:%M:%S').timestamp())
+                power = int(fields[3].strip()) if fields[3].strip().lstrip('-').isdigit() else 0
+                packets = int(fields[4].strip()) if fields[4].strip().isdigit() else 0
+                bssid = fields[5].strip()
+                probed_essids = fields[6].strip()
+                
+                # Normalize signal strength
+                signal = min(100, max(0, int((100 + power) * 2))) if power < 0 else 0
+                
+                # Get vendor from MAC
+                vendor = get_vendor_from_mac(mac)
+                
+                # Parse probed networks
+                probes = [p.strip() for p in probed_essids.split(',') if p.strip()]
+                
+                clients.append({
+                    'mac': mac,
+                    'bssid': bssid,
+                    'power': signal,
+                    'rate': '0-0',  # Not provided by airodump CSV
+                    'lost': 0,      # Not provided by airodump CSV
+                    'frames': packets,
+                    'probe': probes,
+                    'vendor': vendor,
+                    'firstSeen': first_seen,
+                    'lastSeen': last_seen
+                })
+                
+                # Update client count for the associated network
+                if bssid != '(not associated)':
+                    for network in networks:
+                        if network['bssid'] == bssid:
+                            network['clients'] += 1
+                            break
+        
+        return networks, clients
+    except Exception as e:
+        print(f"Error parsing CSV: {str(e)}")
+        return [], []
+
+def get_vendor_from_mac(mac):
+    """Get vendor name from MAC address"""
+    # In a real implementation, you would use a MAC address database
+    # For now, return some common vendors based on the first byte
+    if not mac or len(mac) < 2:
+        return "Unknown"
+        
+    first_byte = mac.split(':')[0].upper()
+    
+    vendors = {
+        '00': 'Xerox',
+        '08': 'Apple',
+        '18': 'Cisco',
+        '28': 'Netgear',
+        '30': 'Dell',
+        '40': 'Huawei',
+        '44': 'Google',
+        '50': 'Amazon',
+        '60': 'Intel',
+        '70': 'Samsung',
+        '80': 'Sony',
+        '90': 'Microsoft',
+        'A0': 'Lenovo',
+        'B0': 'HP',
+        'C0': 'TP-Link',
+        'D0': 'D-Link',
+        'E0': 'Ubiquiti',
+        'F0': 'Belkin'
+    }
+    
+    return vendors.get(first_byte, "Unknown")
