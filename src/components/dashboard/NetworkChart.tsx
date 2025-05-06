@@ -1,8 +1,7 @@
-
 import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ChartContainer } from '@/components/ui/chart';
-import { WiFi, Users, RefreshCw } from 'lucide-react';
+import { Wifi, Users, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Network } from '@/types/network';
 import { Client } from '@/types/client';
@@ -207,7 +206,7 @@ const NetworkChart: React.FC<NetworkChartProps> = ({ networks, clients, isLoadin
       <CardHeader className="pb-2">
         <div className="flex justify-between items-center">
           <CardTitle className="text-melon-green flex items-center gap-2 text-lg">
-            <WiFi className="h-5 w-5" />
+            <Wifi className="h-5 w-5" />
             Network Topology
           </CardTitle>
           <div className="flex items-center gap-2">
