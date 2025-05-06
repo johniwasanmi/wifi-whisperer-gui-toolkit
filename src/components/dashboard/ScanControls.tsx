@@ -1,126 +1,141 @@
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Wifi, Loader2, WifiOff, RefreshCw } from "lucide-react";
-import { wifiService, WifiInterface } from "@/services/wifiService";
+import { Wifi, Loader2, WifiOff, Play, X } from "lucide-react";
 import { toast } from "sonner";
+import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 
 interface ScanControlsProps {
-  onStartScan: (interfaceName: string) => void;
+  onStartScan: (options: ScanOptions) => void;
   onStopScan: () => void;
   isScanning: boolean;
+  selectedInterface: string;
+  interfaceInMonitorMode: boolean;
 }
 
-const ScanControls = ({ onStartScan, onStopScan, isScanning }: ScanControlsProps) => {
-  const [selectedInterface, setSelectedInterface] = useState<string>("");
-  const [interfaces, setInterfaces] = useState<WifiInterface[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+export interface ScanOptions {
+  interfaceName: string;
+  channel?: number | number[];
+  writeCapture?: boolean;
+  beacons?: boolean;
+  updateInterval?: number;
+}
 
-  const fetchInterfaces = async () => {
-    setIsLoading(true);
-    try {
-      const data = await wifiService.getInterfaces();
-      setInterfaces(data);
-      
-      // Auto-select monitor interfaces if available
-      const monitorInterface = data.find(iface => iface.status === "monitor");
-      if (monitorInterface) {
-        setSelectedInterface(monitorInterface.name);
-      } else if (data.length > 0) {
-        setSelectedInterface(data[0].name);
-      }
-      
-    } catch (error) {
-      console.error("Failed to fetch interfaces:", error);
-      toast.error("Failed to load wireless interfaces");
-    } finally {
-      setIsLoading(false);
+const ScanControls = ({ 
+  onStartScan, 
+  onStopScan, 
+  isScanning, 
+  selectedInterface, 
+  interfaceInMonitorMode 
+}: ScanControlsProps) => {
+  const [scanOptions, setScanOptions] = useState<ScanOptions>({
+    interfaceName: selectedInterface,
+    channel: 0, // 0 = all channels
+    writeCapture: true,
+    beacons: true,
+    updateInterval: 1 // seconds
+  });
+
+  const handleStartScan = () => {
+    if (!selectedInterface) {
+      toast.error("Please select an interface first");
+      return;
     }
-  };
-
-  useEffect(() => {
-    fetchInterfaces();
-  }, []);
-
-  const startMonitorMode = async () => {
-    if (!selectedInterface) return;
     
-    setIsLoading(true);
-    try {
-      const result = await wifiService.startMonitorMode(selectedInterface);
-      
-      if (result.success) {
-        toast.success(result.message);
-        fetchInterfaces(); // Refresh interfaces
-      } else {
-        toast.error("Failed to start monitor mode");
-      }
-    } catch (error) {
-      console.error("Error starting monitor mode:", error);
-      toast.error("Error starting monitor mode");
-    } finally {
-      setIsLoading(false);
+    if (!interfaceInMonitorMode) {
+      toast.error("Selected interface must be in monitor mode for scanning");
+      return;
     }
+    
+    onStartScan({
+      ...scanOptions,
+      interfaceName: selectedInterface
+    });
   };
 
   return (
-    <Card className="bg-melon-darkGreen/10 border-melon-green shadow-md">
+    <Card className="bg-melon-darkGreen/5 border-melon-green/40 shadow-md">
       <CardHeader>
         <div className="flex justify-between items-center">
-          <CardTitle className="text-melon-red flex items-center gap-2">
+          <CardTitle className="text-melon-green flex items-center gap-2 text-lg">
             <Wifi className="h-5 w-5" />
-            Network Scanner
+            Scan Controls
           </CardTitle>
-          <Button 
-            variant="ghost" 
-            size="icon" 
-            onClick={fetchInterfaces}
-            disabled={isLoading}
-            className="text-melon-darkGreen hover:text-melon-green hover:bg-melon-darkGreen/10"
-          >
-            <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-          </Button>
         </div>
         <CardDescription className="text-melon-gray">
-          Discover wireless networks in your vicinity
+          Configure network discovery parameters
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
-          <label className="text-sm font-medium text-melon-darkGreen">Interface</label>
-          <Select
-            disabled={isScanning || isLoading}
-            value={selectedInterface}
-            onValueChange={setSelectedInterface}
-          >
-            <SelectTrigger className="border-melon-green/50">
-              <SelectValue placeholder="Select interface" />
-            </SelectTrigger>
-            <SelectContent>
-              {interfaces.map((iface) => (
-                <SelectItem key={iface.name} value={iface.name}>
-                  {iface.name} {iface.status === "monitor" ? "(Monitor Mode)" : ""}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex justify-between items-center">
+            <Label htmlFor="selected-interface">Selected Interface</Label>
+            <span className={`text-sm font-mono ${
+              interfaceInMonitorMode ? 'text-melon-green' : 'text-melon-red'
+            }`}>
+              {selectedInterface || 'None'}
+              {selectedInterface && !interfaceInMonitorMode && " (Not in monitor mode)"}
+            </span>
+          </div>
         </div>
         
-        {selectedInterface && interfaces.find(i => i.name === selectedInterface)?.status !== "monitor" && (
-          <div className="pt-2">
-            <Button 
-              onClick={startMonitorMode}
-              disabled={isLoading || isScanning} 
-              variant="outline" 
-              className="w-full text-xs border-melon-green text-melon-darkGreen hover:bg-melon-green/10"
-            >
-              {isLoading ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : null}
-              Enable Monitor Mode
-            </Button>
+        <div className="space-y-2">
+          <div className="flex justify-between">
+            <Label htmlFor="channel">Channel</Label>
+            <span className="text-sm">
+              {scanOptions.channel === 0 ? 'All' : scanOptions.channel}
+            </span>
           </div>
-        )}
+          <Slider
+            id="channel"
+            disabled={isScanning}
+            value={[scanOptions.channel as number]}
+            min={0}
+            max={14}
+            step={1}
+            onValueChange={(value) => setScanOptions({ ...scanOptions, channel: value[0] })}
+            className="mt-2"
+          />
+        </div>
+        
+        <div className="flex items-center justify-between space-x-2">
+          <Label htmlFor="write-capture" className="flex-grow">Save capture file</Label>
+          <Switch
+            id="write-capture"
+            disabled={isScanning}
+            checked={scanOptions.writeCapture}
+            onCheckedChange={(checked) => setScanOptions({ ...scanOptions, writeCapture: checked })}
+          />
+        </div>
+        
+        <div className="flex items-center justify-between space-x-2">
+          <Label htmlFor="show-beacons" className="flex-grow">Record beacons</Label>
+          <Switch
+            id="show-beacons"
+            disabled={isScanning}
+            checked={scanOptions.beacons}
+            onCheckedChange={(checked) => setScanOptions({ ...scanOptions, beacons: checked })}
+          />
+        </div>
+        
+        <div className="space-y-2">
+          <div className="flex justify-between">
+            <Label htmlFor="update-interval">Update interval (s)</Label>
+            <span className="text-sm">{scanOptions.updateInterval}s</span>
+          </div>
+          <Slider
+            id="update-interval"
+            disabled={isScanning}
+            value={[scanOptions.updateInterval]}
+            min={1}
+            max={5}
+            step={1}
+            onValueChange={(value) => setScanOptions({ ...scanOptions, updateInterval: value[0] })}
+          />
+        </div>
         
         <div className="flex items-center space-x-2">
           {isScanning && (
@@ -136,20 +151,20 @@ const ScanControls = ({ onStartScan, onStopScan, isScanning }: ScanControlsProps
       <CardFooter>
         {!isScanning ? (
           <Button
-            onClick={() => onStartScan(selectedInterface)}
-            disabled={!selectedInterface || isLoading}
-            className="w-full bg-melon-red hover:bg-melon-darkRed text-white"
+            onClick={handleStartScan}
+            disabled={!selectedInterface || !interfaceInMonitorMode}
+            className="w-full bg-melon-green hover:bg-melon-darkGreen text-white"
           >
-            <Wifi className="mr-2 h-4 w-4" />
+            <Play className="mr-2 h-4 w-4" />
             Start Scanning
           </Button>
         ) : (
           <Button
             onClick={onStopScan}
             variant="destructive"
-            className="w-full bg-melon-darkRed hover:bg-melon-red"
+            className="w-full bg-melon-red hover:bg-melon-darkRed"
           >
-            <WifiOff className="mr-2 h-4 w-4" />
+            <X className="mr-2 h-4 w-4" />
             Stop Scanning
           </Button>
         )}
