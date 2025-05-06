@@ -17,6 +17,7 @@ import {
 import { Wifi, Zap, Shield, Terminal, Settings } from "lucide-react";
 import { Link } from "react-router-dom";
 import WatermelonLogo from "@/components/logo/WatermelonLogo";
+import ThemeToggle from "@/components/common/ThemeToggle";
 
 interface SidebarLayoutProps {
   children: React.ReactNode;
@@ -25,15 +26,18 @@ interface SidebarLayoutProps {
 export default function SidebarLayout({ children }: SidebarLayoutProps) {
   return (
     <SidebarProvider>
-      <div className="min-h-screen flex w-full">
+      <div className="min-h-screen flex w-full dark:bg-melon-darkBg">
         <AppSidebar />
         <main className="flex-1 p-0">
-          <div className="flex items-center p-4 border-b border-melon-green">
-            <SidebarTrigger />
-            <div className="ml-4 flex items-center">
-              <span className="font-bold text-lg text-melon-red">WiFiMellon</span>
-              <span className="text-xs ml-2 text-muted-foreground">v0.1</span>
+          <div className="flex justify-between items-center p-4 border-b border-melon-green dark:border-melon-darkGreenAccent">
+            <div className="flex items-center">
+              <SidebarTrigger />
+              <div className="ml-4 flex items-center">
+                <span className="font-bold text-lg text-melon-red dark:text-melon-red">WiFiMellon</span>
+                <span className="text-xs ml-2 text-muted-foreground">v0.1</span>
+              </div>
             </div>
+            <ThemeToggle />
           </div>
           <div className="p-6">
             {children}
@@ -74,7 +78,7 @@ function AppSidebar() {
   ];
 
   return (
-    <Sidebar className="border-r border-melon-darkGreen bg-melon-green/90">
+    <Sidebar className="border-r border-melon-darkGreen bg-melon-green/90 dark:bg-melon-darkGreenAccent dark:border-melon-darkBorder">
       <SidebarHeader className="p-4">
         <div className="flex items-center space-x-2">
           <WatermelonLogo size={40} />
@@ -92,7 +96,7 @@ function AppSidebar() {
               {menuItems.map((item) => (
                 <SidebarMenuItem key={item.path}>
                   <SidebarMenuButton asChild>
-                    <Link to={item.path} className="flex items-center text-white hover:bg-melon-darkGreen/50 hover:text-white">
+                    <Link to={item.path} className="flex items-center text-white hover:bg-melon-darkGreen/50 hover:text-white dark:hover:bg-melon-darkGreenAccent/50">
                       <item.icon className="mr-2 h-4 w-4" />
                       <span>{item.title}</span>
                     </Link>

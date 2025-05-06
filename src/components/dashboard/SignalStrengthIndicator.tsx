@@ -11,12 +11,12 @@ const SignalStrengthIndicator = ({ signal, className }: SignalStrengthIndicatorP
   // Calculate color based on signal strength
   const getColor = (threshold: number) => {
     if (signal >= threshold) {
-      if (signal > 80) return 'bg-melon-red';
-      if (signal > 50) return 'bg-melon-lightRed';
-      if (signal > 30) return 'bg-yellow-500';
-      return 'bg-red-500';
+      if (signal > 80) return 'bg-melon-red dark:bg-melon-darkRedAccent';
+      if (signal > 50) return 'bg-melon-lightRed dark:bg-melon-red/80';
+      if (signal > 30) return 'bg-yellow-500 dark:bg-yellow-600';
+      return 'bg-red-500 dark:bg-red-600';
     }
-    return 'bg-gray-700';
+    return 'bg-gray-700 dark:bg-gray-800';
   };
 
   return (

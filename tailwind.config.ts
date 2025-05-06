@@ -74,6 +74,12 @@ export default {
 					black: '#212121', // Watermelon seeds color
 					gray: '#424242', // Dark gray for text
 					lightGray: '#BDBDBD', // Light gray for backgrounds
+					// Dark mode colors
+					darkBg: '#121212', 
+					darkCard: '#1E1E1E',
+					darkBorder: '#333333',
+					darkGreenAccent: '#1B5E20',
+					darkRedAccent: '#B71C1C',
 				}
 			},
 			borderRadius: {
