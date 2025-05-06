@@ -38,7 +38,62 @@ def run_command(command: List[str]) -> Tuple[bool, str, Optional[str]]:
 
 @app.route('/api/interfaces', methods=['GET'])
 def get_interfaces():
-    """Get available wireless interfaces."""
+    """Get available wireless interfaces using airmon-ng."""
+    success, stdout, stderr = run_command(['airmon-ng'])
+    if not success:
+        # Fallback to iwconfig if airmon-ng fails
+        logger.warning("airmon-ng failed, falling back to iwconfig")
+        return fallback_iwconfig()
+    
+    interfaces = []
+    
+    # Parse airmon-ng output
+    # Format: PHY Interface Driver Chipset
+    lines = stdout.strip().split('\n')
+    
+    # Skip header lines
+    for line in lines:
+        if "PHY" in line and "Interface" in line and "Driver" in line and "Chipset" in line:
+            continue
+        
+        # Skip empty lines
+        if not line.strip():
+            continue
+        
+        # Parse line
+        parts = line.split('\t')
+        if len(parts) >= 4:
+            phy = parts[0].strip()
+            interface = parts[1].strip()
+            driver = parts[2].strip()
+            chipset = ' '.join(part.strip() for part in parts[3:]).strip()
+            
+            # Skip if no interface name
+            if not interface:
+                continue
+            
+            # Determine if interface is in monitor mode
+            mode = "monitor" if "mon" in interface else "normal"
+            
+            interfaces.append({
+                "name": interface,
+                "driver": driver,
+                "chipset": chipset,
+                "status": mode,
+                "phy": phy
+            })
+    
+    # If no interfaces found, add mock interfaces for testing
+    if not interfaces:
+        interfaces = [
+            {"name": "wlan0", "driver": "iwlwifi", "chipset": "Intel", "status": "normal", "phy": "phy0"},
+            {"name": "wlan1", "driver": "rtl8812au", "chipset": "Realtek", "status": "normal", "phy": "phy1"}
+        ]
+        
+    return jsonify(interfaces)
+
+def fallback_iwconfig():
+    """Fallback to using iwconfig if airmon-ng is not available"""
     success, stdout, stderr = run_command(['iwconfig'])
     if not success:
         return jsonify({"error": stderr}), 500
@@ -74,14 +129,15 @@ def get_interfaces():
                         "name": current_interface,
                         "driver": driver,
                         "chipset": chipset,
-                        "status": mode
+                        "status": mode,
+                        "phy": "unknown"
                     })
     
-    # If no interfaces found, add a mock interface for testing
+    # If no interfaces found, add mock interfaces for testing
     if not interfaces:
         interfaces = [
-            {"name": "wlan0", "driver": "iwlwifi", "chipset": "Intel", "status": "normal"},
-            {"name": "wlan1", "driver": "rtl8812au", "chipset": "Realtek", "status": "normal"}
+            {"name": "wlan0", "driver": "iwlwifi", "chipset": "Intel", "status": "normal", "phy": "phy0"},
+            {"name": "wlan1", "driver": "rtl8812au", "chipset": "Realtek", "status": "normal", "phy": "phy1"}
         ]
         
     return jsonify(interfaces)
@@ -146,6 +202,14 @@ def scan_networks():
     if not interface:
         return jsonify({"error": "Interface name is required"}), 400
     
+    # Check if interface is in monitor mode
+    success, stdout, stderr = run_command(['iwconfig', interface])
+    if not success or "Mode:Monitor" not in stdout:
+        return jsonify({
+            "error": "Interface is not in monitor mode", 
+            "details": stderr or "Run airmon-ng start on the interface first"
+        }), 400
+    
     # Generate a unique ID for this scan
     scan_id = str(uuid.uuid4())
     output_file = f"/tmp/scan_{scan_id}"
@@ -160,16 +224,10 @@ def scan_networks():
         # Let the scan run for a few seconds
         time.sleep(5)
         
-        # Stop the process
-        if scan_id in active_processes:
-            process = active_processes[scan_id]
-            process.send_signal(signal.SIGTERM)
-            process.wait(timeout=2)
-            del active_processes[scan_id]
-        
         # Parse the CSV file
-        csv_file = f"{output_file}-01.csv"
         networks = []
+        clients = []
+        csv_file = f"{output_file}-01.csv"
         
         if os.path.exists(csv_file):
             with open(csv_file, 'r') as f:
@@ -177,22 +235,34 @@ def scan_networks():
             
             # Parse networks section
             network_section = True
-            for line in lines:
-                line = line.strip()
+            current_line = 0
+            
+            while current_line < len(lines):
+                line = lines[current_line].strip()
+                current_line += 1
                 
                 if line == "":
                     network_section = False
-                    continue
+                    # Skip the client header line
+                    current_line += 1
+                    break
                 
                 if network_section and "BSSID" not in line and line:
                     # Parse network info
                     parts = line.split(',')
                     if len(parts) >= 14:
                         bssid = parts[0].strip()
-                        power = parts[3].strip()
+                        first_seen = parts[1].strip()
+                        last_seen = parts[2].strip()
                         channel = parts[5].strip()
-                        encryption = parts[6].strip()
-                        ssid = parts[13].strip()
+                        speed = parts[6].strip()
+                        privacy = parts[7].strip()
+                        power = parts[8].strip()
+                        beacons = parts[9].strip()
+                        iv_packets = parts[10].strip()
+                        lan_ip = parts[11].strip()
+                        id_length = parts[12].strip()
+                        essid = parts[13].strip()
                         
                         try:
                             signal = abs(int(power))
@@ -204,28 +274,99 @@ def scan_networks():
                         except ValueError:
                             channel_num = 0
                         
+                        # Determine encryption type from privacy field
+                        encryption = "OPEN"
+                        if "WPA3" in privacy:
+                            encryption = "WPA3"
+                        elif "WPA2" in privacy:
+                            encryption = "WPA2"
+                        elif "WPA" in privacy:
+                            encryption = "WPA"
+                        elif "WEP" in privacy:
+                            encryption = "WEP"
+                            
+                        # Create network object
                         network = {
                             "id": str(len(networks) + 1),
-                            "ssid": ssid if ssid != "" else "",
+                            "ssid": essid if essid != "" else "",
                             "bssid": bssid,
                             "channel": channel_num,
                             "signal": min(signal, 100),  # Cap at 100
-                            "encryption": "WPA2" if "WPA2" in encryption else 
-                                         "WPA3" if "WPA3" in encryption else
-                                         "WPA" if "WPA" in encryption else
-                                         "WEP" if "WEP" in encryption else "OPEN",
+                            "encryption": encryption,
                             "vendor": bssid[:8].upper(),  # Would need a proper OUI database
-                            "clients": 0,  # Would need to parse clients section
-                            "firstSeen": int(time.time() * 1000),
-                            "lastSeen": int(time.time() * 1000)
+                            "clients": 0,  # Will be updated after parsing clients
+                            "firstSeen": int(time.mktime(time.strptime(first_seen, "%Y-%m-%d %H:%M:%S")) * 1000) if first_seen.strip() else int(time.time() * 1000),
+                            "lastSeen": int(time.mktime(time.strptime(last_seen, "%Y-%m-%d %H:%M:%S")) * 1000) if last_seen.strip() else int(time.time() * 1000)
                         }
                         networks.append(network)
             
-            # Clean up the temporary files
-            for ext in ['-01.csv', '-01.kismet.csv', '-01.kismet.netxml', '-01.cap']:
-                file_path = f"{output_file}{ext}"
-                if os.path.exists(file_path):
-                    os.remove(file_path)
+            # Parse clients section - starts after the first empty line
+            while current_line < len(lines):
+                line = lines[current_line].strip()
+                current_line += 1
+                
+                if "Station MAC" not in line and line:
+                    # Parse client info
+                    parts = line.split(',')
+                    if len(parts) >= 6:
+                        mac = parts[0].strip()
+                        first_seen = parts[1].strip()
+                        last_seen = parts[2].strip()
+                        power = parts[3].strip()
+                        packets = parts[4].strip()
+                        bssid = parts[5].strip()
+                        
+                        # Parse probe requests
+                        probe = []
+                        if len(parts) > 6:
+                            probes = ','.join(parts[6:]).strip()
+                            if probes:
+                                probe = [p.strip() for p in probes.split(',')]
+                        
+                        try:
+                            signal_power = abs(int(power))
+                        except ValueError:
+                            signal_power = 0
+                        
+                        try:
+                            packet_count = int(packets)
+                        except ValueError:
+                            packet_count = 0
+                        
+                        # Create client object
+                        client = {
+                            "mac": mac,
+                            "bssid": bssid,
+                            "power": min(signal_power, 100),  # Cap at 100
+                            "rate": "0-0",  # Not available in CSV, would need to parse real-time
+                            "lost": 0,  # Not available in CSV, would need to parse real-time
+                            "frames": packet_count,
+                            "probe": probe,
+                            "vendor": mac[:8].upper(),  # Would need a proper OUI database
+                            "firstSeen": int(time.mktime(time.strptime(first_seen, "%Y-%m-%d %H:%M:%S")) * 1000) if first_seen.strip() else int(time.time() * 1000),
+                            "lastSeen": int(time.mktime(time.strptime(last_seen, "%Y-%m-%d %H:%M:%S")) * 1000) if last_seen.strip() else int(time.time() * 1000)
+                        }
+                        clients.append(client)
+                        
+                        # Update client count for the associated AP
+                        if bssid != "(not associated)":
+                            for network in networks:
+                                if network["bssid"] == bssid:
+                                    network["clients"] += 1
+                                    break
+            
+        # Clean up the process
+        if scan_id in active_processes:
+            process = active_processes[scan_id]
+            process.send_signal(signal.SIGTERM)
+            process.wait(timeout=2)
+            del active_processes[scan_id]
+            
+        # Clean up the temporary files
+        for ext in ['-01.csv', '-01.kismet.csv', '-01.kismet.netxml', '-01.cap']:
+            file_path = f"{output_file}{ext}"
+            if os.path.exists(file_path):
+                os.remove(file_path)
         
         # If no networks found (or error reading file), return mock data
         if not networks:
@@ -243,8 +384,23 @@ def scan_networks():
                     "lastSeen": int(time.time() * 1000),
                 }
             ]
+            
+            clients = [
+                {
+                    "mac": "AA:BB:CC:11:22:33",
+                    "bssid": "00:11:22:33:44:55",
+                    "power": 70,
+                    "rate": "54-54",
+                    "lost": 0,
+                    "frames": 52,
+                    "probe": ["HomeWiFi"],
+                    "vendor": "Apple",
+                    "firstSeen": int(time.time() * 1000),
+                    "lastSeen": int(time.time() * 1000),
+                }
+            ]
         
-        return jsonify({"networks": networks})
+        return jsonify({"networks": networks, "clients": clients})
     except Exception as e:
         logger.error(f"Error during scan: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -320,6 +476,151 @@ def run_deauth_attack(attack_id, interface, bssid, client_mac, packets):
         logger.error(f"Error during deauth attack: {str(e)}")
         if attack_id in active_processes:
             del active_processes[attack_id]
+
+@app.route('/api/airodump/output', methods=['POST'])
+def parse_airodump_output():
+    """Parse airodump-ng output directly from terminal output."""
+    data = request.json
+    output = data.get('output')
+    
+    if not output:
+        return jsonify({"error": "Output data is required"}), 400
+        
+    # Parse the output into networks and clients
+    networks = []
+    clients = []
+    
+    lines = output.strip().split('\n')
+    network_section = False
+    client_section = False
+    
+    for line in lines:
+        line = line.strip()
+        
+        # Skip empty lines
+        if not line:
+            continue
+            
+        # Check for section headers
+        if "BSSID              PWR" in line:
+            network_section = True
+            client_section = False
+            continue
+            
+        if "BSSID              STATION" in line:
+            network_section = False
+            client_section = True
+            continue
+            
+        # Parse network line
+        if network_section and not line.startswith("BSSID"):
+            try:
+                # Example: 00:14:6C:7A:41:81   34 100       57       14    1   9  11e  WEP  WEP         bigbear 
+                parts = line.split()
+                if len(parts) >= 11:
+                    bssid = parts[0]
+                    signal = abs(int(parts[1])) if parts[1] != "-1" else 0
+                    beacons = int(parts[3]) if parts[3].isdigit() else 0
+                    data = int(parts[4]) if parts[4].isdigit() else 0
+                    channel = int(parts[6]) if parts[6].isdigit() else 0
+                    
+                    # Extract encryption and cipher
+                    enc_idx = 8
+                    cipher_idx = 9
+                    auth_idx = 10
+                    ssid_idx = 11
+                    
+                    # Check if MB has an 'e' suffix indicating QoS
+                    if 'e' in parts[7]:
+                        enc_idx = 8
+                        cipher_idx = 9
+                        auth_idx = 10
+                        ssid_idx = 11
+                    
+                    encryption = parts[enc_idx] if len(parts) > enc_idx else "OPN"
+                    
+                    # Get ESSID - it might contain spaces, so join the remaining parts
+                    ssid = ' '.join(parts[ssid_idx:]) if len(parts) > ssid_idx else ""
+                    
+                    # Map encryption values
+                    if encryption == "WPA3":
+                        enc_type = "WPA3"
+                    elif encryption == "WPA2":
+                        enc_type = "WPA2"
+                    elif encryption == "WPA":
+                        enc_type = "WPA"
+                    elif encryption == "WEP":
+                        enc_type = "WEP"
+                    else:
+                        enc_type = "OPEN"
+                        
+                    # Create network object
+                    network = {
+                        "id": str(len(networks) + 1),
+                        "ssid": ssid,
+                        "bssid": bssid,
+                        "channel": channel,
+                        "signal": min(signal, 100),  # Cap at 100
+                        "encryption": enc_type,
+                        "vendor": bssid[:8].upper(),  # Would need a proper OUI database
+                        "clients": 0,
+                        "firstSeen": int(time.time() * 1000),
+                        "lastSeen": int(time.time() * 1000)
+                    }
+                    networks.append(network)
+            except Exception as e:
+                logger.error(f"Error parsing network line: {line}, Error: {str(e)}")
+                
+        # Parse client line
+        if client_section and not line.startswith("BSSID"):
+            try:
+                # Example: 00:14:6C:7A:41:81  00:0F:B5:32:31:31   51   36-24    2       14           
+                parts = line.split()
+                if len(parts) >= 6:
+                    bssid = parts[0]
+                    mac = parts[1]
+                    power = abs(int(parts[2])) if parts[2] != "-1" else 0
+                    rate = parts[3]
+                    lost = int(parts[4]) if parts[4].isdigit() else 0
+                    frames = int(parts[5]) if parts[5].isdigit() else 0
+                    
+                    # Check for probes
+                    probe_idx = 7  # Typical index after "Notes" column
+                    probes = []
+                    
+                    if len(parts) > probe_idx:
+                        probes = ' '.join(parts[probe_idx:]).split(',')
+                        probes = [p.strip() for p in probes]
+                    
+                    # Create client object
+                    client = {
+                        "mac": mac,
+                        "bssid": bssid,
+                        "power": min(power, 100),  # Cap at 100
+                        "rate": rate,
+                        "lost": lost,
+                        "frames": frames,
+                        "probe": probes,
+                        "vendor": mac[:8].upper(),  # Would need a proper OUI database
+                        "firstSeen": int(time.time() * 1000),
+                        "lastSeen": int(time.time() * 1000)
+                    }
+                    clients.append(client)
+                    
+                    # Update client count for the associated AP
+                    if bssid != "(not associated)":
+                        for network in networks:
+                            if network["bssid"] == bssid:
+                                network["clients"] += 1
+                                break
+            except Exception as e:
+                logger.error(f"Error parsing client line: {line}, Error: {str(e)}")
+    
+    return jsonify({
+        "success": True,
+        "networks": networks,
+        "clients": clients
+    })
 
 @app.route('/api/status', methods=['GET'])
 def get_status():

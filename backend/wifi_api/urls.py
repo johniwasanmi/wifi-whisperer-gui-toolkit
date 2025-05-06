@@ -6,7 +6,8 @@ from .views import (
     MonitorModeStopView,
     ScanNetworksView,
     DeauthAttackView,
-    StatusView
+    StatusView,
+    AirodumpOutputView
 )
 
 urlpatterns = [
@@ -16,4 +17,5 @@ urlpatterns = [
     path('scan/', ScanNetworksView.as_view(), name='scan'),
     path('attack/deauth/', DeauthAttackView.as_view(), name='deauth'),
     path('status/', StatusView.as_view(), name='status'),
+    path('airodump/output/', AirodumpOutputView.as_view(), name='airodump_output'),
 ]
